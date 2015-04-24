@@ -1,0 +1,136 @@
+---
+title: "Machine Learning Project"
+author: "Jason Merefield"
+date: "Thursday, April 23, 2015"
+output: html_document
+---
+
+# Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
+
+# Goal
+
+The goal of this project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. I will also use the chosen prediction model to predict 20 different test cases.
+
+# Loading up the data
+
+```{r,echo=FALSE}
+# load libraries
+loadLibraries <- function(){
+        require(rpart, quietly = T, warn.conflicts = F)
+        require(randomForest, quietly = T, warn.conflicts = F)
+        require(caret, quietly = T, warn.conflicts = F)
+}
+
+suppressPackageStartupMessages(loadLibraries())
+```
+
+```{r}
+# load training data
+pml.training <- read.csv("~/Coursera/Machine Learning/pml-training.csv", stringsAsFactors=F, na.strings=c("NA","#DIV/0!"))
+```
+# Transforming the data
+
+The data has a few columns that aren't of interest, and quite a few with all or nealy-all 'NA' values. The following code removes those columns.
+The target, column 'classe', is also converted to a factor.
+
+```{r}
+# convert target to factor
+pml.training$classe <- as.factor(pml.training$classe)
+# remove ids and other metadata-type columns from data frame
+df <- pml.training[,-c(1:6)]
+# remove any columns with high proportion of NAs
+t <- sapply(df, function(x) ifelse(sum(is.na(x)) / nrow(df) > 0.5, FALSE, TRUE))
+t_df <- df[,t]
+# get predictor columns out
+cols <- t_df[,-54]
+# fix na's up with imputation
+imputeModel <- preProcess (cols, method = c("knnImpute"))
+cols_final <- predict(imputeModel,newdata = cols)
+# put back together the data frame
+df_final <- as.data.frame(cbind(cols_final,classe = df$classe))
+# set psuedo-random seed to allow reproducability
+set.seed(12345)
+# split training data
+ids <- createDataPartition(y = df_final$classe, p=0.8, list=F)
+train_df <- df_final[ids,]
+test_df <- df_final[-ids,]
+```
+
+# Test prediction accuracy with model 'rpart' (Recursive Partitioning)
+
+First up I used the 'rpart' model to train the model.
+For this, and subsequent training, I am using a repeated cross-validation with 3 repeats of 4 folds.
+
+```{r}
+# setup training control for caret
+fitControl <- trainControl(method="repeatedcv",number=4,repeats=3)
+# try 'rpart' model first
+rpart_fit <- train(classe ~ ., data=train_df, trControl=fitControl, method='rpart')
+# get predictions
+train_pred_rpart <- predict(rpart_fit,train_df)
+test_pred_rpart <- predict(rpart_fit,test_df)
+# get out confusion matrix for each data set
+train_cm_rpart <- caret::confusionMatrix(table(train_pred_rpart, train_df$classe))
+test_cm_rpart <- caret::confusionMatrix(table(test_pred_rpart, test_df$classe))
+# calculate sample errors using the reciprocal of the accuracy
+in_sample_error_rpart = 1 - train_cm_rpart$overall[1]
+out_of_sample_error_rpart = 1 - test_cm_rpart$overall[1]
+```
+
+The out-of-sample error from the 'rpart' model is `r out_of_sample_error_rpart`.
+
+# Test prediction accuracy with model 'rf' (Random Forest)
+
+Next up I tried the old faithful Random Forest model.
+I use this as my benchmark in all my Kaggle competitions and have faith it will give me one of the lowest out-of-sample errors.
+
+```{r}
+# try 'rf' model next
+rf_fit <- train(classe ~ ., data=train_df, trControl=fitControl, method='rf')
+
+# get predictions
+train_pred_rf <- predict(rf_fit,train_df)
+test_pred_rf <- predict(rf_fit,test_df)
+
+# get out confusion matrix for each data set
+train_cm_rf <- caret::confusionMatrix(table(train_pred_rf, train_df$classe))
+test_cm_rf <- caret::confusionMatrix(table(test_pred_rf, test_df$classe))
+
+# calculate sample errors using the reciprocal of the accuracy
+in_sample_error_rf = 1 - train_cm_rf$overall[1]
+out_of_sample_error_rf = 1 - test_cm_rf$overall[1]
+```
+
+The out-of-sample error from the 'rpart' model is `r out_of_sample_error_rf`.
+
+# Validation of model
+
+To truly test the model it is advisable to test it against a 'validation' test set; a data set that has not been touched by training and testing.
+
+The lecturer has provided just such a set, of which I ran the RF model through as follows:
+
+```{r}
+# load training data
+pml.testing <- read.csv("~/Coursera/Machine Learning/pml-testing.csv", stringsAsFactors=F, na.strings=c("NA","#DIV/0!"))
+# remove ids and other metadata-type columns from data frame
+df <- pml.testing[,-c(1:6,160)]
+# remove any columns with high proportion of NAs
+t <- sapply(df, function(x) ifelse(sum(is.na(x)) / nrow(df) > 0.5, FALSE, TRUE))
+t_df <- df[,t]
+# fix na's up with imputation using model created during preprocess of training
+cols_final <- predict(imputeModel,newdata = t_df)
+# now predict using RF model
+new_predictions <- predict(rf_fit, cols_final)
+# submit for evaluation
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("~/Coursera/Machine Learning/For submission/problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+
+pml_write_files(new_predictions)
+```
